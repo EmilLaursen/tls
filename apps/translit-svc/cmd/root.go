@@ -23,6 +23,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/vbauerster/mpb/v5"
+	"github.com/vbauerster/mpb/v5/decor"
 
 	"github.com/pkg/errors"
 
@@ -57,6 +62,8 @@ var rootCmd = &cobra.Command{
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 
+		MB := 1000 * 1000
+
 		out := viper.GetString("output-dir")
 		var getOutputDir func(arg string) string
 
@@ -74,6 +81,15 @@ var rootCmd = &cobra.Command{
 
 		var wg sync.WaitGroup
 
+		p := mpb.New(
+			mpb.WithWaitGroup(&wg),
+			mpb.WithWidth(90),
+			mpb.WithRefreshRate(250*time.Millisecond),
+		)
+
+		start := time.Now()
+		totalBytes := int64(0)
+
 		for _, arg := range args {
 			outputDir := getOutputDir(arg)
 			outputDir, err := filepath.Abs(outputDir)
@@ -89,6 +105,25 @@ var rootCmd = &cobra.Command{
 			transliteratedFile := fmt.Sprintf("%s-transliterated%s", filename, extension)
 
 			outputFilePath := filepath.Join(outputDir, transliteratedFile)
+
+			fi, err := os.Stat(arg)
+			if err != nil {
+				log.Fatal("file stat error %+v", errors.Wrap(err, ""))
+			}
+			fileSize := fi.Size()
+			atomic.AddInt64(&totalBytes, fileSize)
+
+			bar := p.AddBar(fi.Size(), mpb.BarStyle("[=>-|"),
+				mpb.PrependDecorators(
+					decor.Name(filepath.Base(arg)),
+					decor.CountersKiloByte(" % .2f / % .2f"),
+				),
+				mpb.AppendDecorators(
+					decor.AverageETA(decor.ET_STYLE_GO),
+					decor.Name(" ] "),
+					decor.AverageSpeed(decor.UnitKB, "% .1f"),
+				),
+			)
 
 			wg.Add(1)
 			go func(inputFilePath, outputFilePath string) {
@@ -107,10 +142,15 @@ var rootCmd = &cobra.Command{
 				}
 				defer f.Close()
 
-				daTrans.Process(bufio.NewReader(inputFile), bufio.NewWriter(f))
+				daTrans.Process(bufio.NewReader(bar.ProxyReader(inputFile)), bufio.NewWriter(f))
 			}(arg, outputFilePath)
 		}
-		wg.Wait()
+
+		p.Wait()
+
+		totalTime := time.Since(start)
+		mbPerSec := float64(totalBytes/int64(MB)) / totalTime.Seconds()
+		fmt.Printf("Processing speed: %.1f MB/s", mbPerSec)
 
 		if len(args) > 0 {
 			os.Exit(0)
