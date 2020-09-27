@@ -42,9 +42,22 @@ import (
 var cfgFile string
 
 var rootCmd = &cobra.Command{
-	Use:   "tls",
+	Use: "tls file1.txt file2.txt",
+	Example: `cat file1.txt | tls
+tls -v -o /my/awesome/dir file1.txt file2.txt file3.txt
+	`,
 	Short: "Transliterates stdin to ASCII, and also preserves æøå§, then outputs to stdout",
-	Long:  `Transliterates stdin to ASCII, and also preserves æøå§, then outputs to stdout`,
+	Long: `Transliterates stdin to ASCII, and also preserves æøå§, then outputs to stdout.
+Supplied file arguments are processed concurrently. There is no concurrency bound
+so do not supply a large amount of files, unless you want to use alot of file
+descriptors.
+
+		tls original/path/file1.txt
+
+will place the transliterated file next to file1.txt at
+
+		original/path/file1-transliterated.txt
+`,
 	Args: func(cmd *cobra.Command, args []string) error {
 
 		HIGH_NUMBER_OF_GOROUTINES := 512
@@ -188,7 +201,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "show progress bars")
 	viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
 
-	rootCmd.PersistentFlags().StringP("output-dir", "o", "", "output directory")
+	rootCmd.PersistentFlags().StringP("output-dir", "o", "", "custom output directory where transliterated files are placed")
 	viper.BindPFlag("output-dir", rootCmd.PersistentFlags().Lookup("output-dir"))
 
 	cobra.OnInitialize(initConfig)
@@ -222,7 +235,6 @@ func initConfig() {
 
 func ProcessStdIn(cmd *cobra.Command) {
 
-	log.Print("Processing stdin")
 	fi, err := os.Stdin.Stat()
 	if err != nil {
 		log.Panic("file.stat()", err)
