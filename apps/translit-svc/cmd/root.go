@@ -18,7 +18,13 @@ package cmd
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+
+	"github.com/pkg/errors"
 
 	"github.com/spf13/cobra"
 
@@ -34,8 +40,95 @@ var rootCmd = &cobra.Command{
 	Use:   "tls",
 	Short: "Transliterates stdin to ASCII, and also preserves æøå§, then outputs to stdout",
 	Long:  `Transliterates stdin to ASCII, and also preserves æøå§, then outputs to stdout`,
+	Args: func(cmd *cobra.Command, args []string) error {
+
+		HIGH_NUMBER_OF_GOROUTINES := 512
+
+		if len(args) > HIGH_NUMBER_OF_GOROUTINES {
+			return errors.Errorf("Relax with the number of files already...")
+		}
+
+		for _, arg := range args {
+			if _, err := os.Stat(arg); err != nil {
+				return errors.Errorf("arguments file %s does not exist", arg)
+			}
+		}
+		return nil
+	},
 	Run: func(cmd *cobra.Command, args []string) {
+
+		out := viper.GetString("output-dir")
+		var getOutputDir func(arg string) string
+
+		if len(out) > 0 {
+			getOutputDir = func(arg string) string {
+				return out
+			}
+		} else {
+			getOutputDir = func(arg string) string {
+				return filepath.Dir(arg)
+			}
+		}
+
 		daTrans := transliteration.NewDanishTransliterator()
+
+		var wg sync.WaitGroup
+
+		for _, arg := range args {
+			outputDir := getOutputDir(arg)
+			outputDir, err := filepath.Abs(outputDir)
+			if err != nil {
+				log.Fatalf("Absolute path error: %+v", err)
+			}
+
+			os.MkdirAll(outputDir, 0755)
+
+			extension := filepath.Ext(arg)
+			filename := strings.TrimSuffix(filepath.Base(arg), extension)
+
+			transliteratedFile := fmt.Sprintf("%s-transliterated%s", filename, extension)
+
+			outputFilePath := filepath.Join(outputDir, transliteratedFile)
+
+			wg.Add(1)
+			go func(inputFilePath, outputFilePath string) {
+				defer wg.Done()
+
+				inputFile, err := os.Open(inputFilePath)
+				if err != nil {
+					log.Fatalf("Error opening file %s: %+v", inputFilePath, err)
+				}
+
+				defer inputFile.Close()
+
+				f, err := os.Create(outputFilePath)
+				if err != nil {
+					log.Fatalf("failed to create file: %+v", errors.Wrap(err, ""))
+				}
+				defer f.Close()
+
+				daTrans.Process(bufio.NewReader(inputFile), bufio.NewWriter(f))
+			}(arg, outputFilePath)
+		}
+		wg.Wait()
+
+		if len(args) > 0 {
+			os.Exit(0)
+		}
+
+		fi, err := os.Stdin.Stat()
+		if err != nil {
+			log.Panic("file.stat()", err)
+		}
+
+		if fi.Mode()&os.ModeNamedPipe == 0 || fi.Size() <= 0 {
+			err := cmd.Help()
+			if err != nil {
+				log.Print(err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
 
 		stdin := bufio.NewReader(cmd.InOrStdin())
 		stdout := bufio.NewWriter(cmd.OutOrStdout())
@@ -54,17 +147,10 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.PersistentFlags().StringP("output-dir", "o", "", "output directory")
+	viper.BindPFlag("output-dir", rootCmd.PersistentFlags().Lookup("output-dir"))
+
 	cobra.OnInitialize(initConfig)
-
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
-
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.testcli.yaml)")
-
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
-	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }
 
 // initConfig reads in config file and ENV variables if set.
