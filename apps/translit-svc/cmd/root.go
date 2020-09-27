@@ -61,10 +61,17 @@ var rootCmd = &cobra.Command{
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-
 		MB := 1000 * 1000
 
+		verbose := viper.GetBool("verbose")
 		out := viper.GetString("output-dir")
+
+		doProcessStdIn := len(args) <= 0
+		if doProcessStdIn {
+			ProcessStdIn(cmd)
+			os.Exit(0)
+		}
+
 		var getOutputDir func(arg string) string
 
 		if len(out) > 0 {
@@ -94,7 +101,7 @@ var rootCmd = &cobra.Command{
 			outputDir := getOutputDir(arg)
 			outputDir, err := filepath.Abs(outputDir)
 			if err != nil {
-				log.Fatalf("Absolute path error: %+v", err)
+				log.Fatalf("Absolute path error: %+v", errors.Wrap(err, ""))
 			}
 
 			os.MkdirAll(outputDir, 0755)
@@ -106,10 +113,12 @@ var rootCmd = &cobra.Command{
 
 			outputFilePath := filepath.Join(outputDir, transliteratedFile)
 
+			// Verbose related...
 			fi, err := os.Stat(arg)
 			if err != nil {
 				log.Fatal("file stat error %+v", errors.Wrap(err, ""))
 			}
+
 			fileSize := fi.Size()
 			atomic.AddInt64(&totalBytes, fileSize)
 
@@ -124,6 +133,7 @@ var rootCmd = &cobra.Command{
 					decor.AverageSpeed(decor.UnitKB, "% .1f"),
 				),
 			)
+			// Verbose related...
 
 			wg.Add(1)
 			go func(inputFilePath, outputFilePath string) {
@@ -131,7 +141,7 @@ var rootCmd = &cobra.Command{
 
 				inputFile, err := os.Open(inputFilePath)
 				if err != nil {
-					log.Fatalf("Error opening file %s: %+v", inputFilePath, err)
+					log.Fatalf("Error opening file %s: %+v", inputFilePath, errors.Wrap(err, ""))
 				}
 
 				defer inputFile.Close()
@@ -142,38 +152,26 @@ var rootCmd = &cobra.Command{
 				}
 				defer f.Close()
 
-				daTrans.Process(bufio.NewReader(bar.ProxyReader(inputFile)), bufio.NewWriter(f))
+				var reader *bufio.Reader
+				if verbose {
+					reader = bufio.NewReader(bar.ProxyReader(inputFile))
+				} else {
+					reader = bufio.NewReader(inputFile)
+				}
+
+				daTrans.Process(reader, bufio.NewWriter(f))
 			}(arg, outputFilePath)
 		}
 
 		p.Wait()
 
-		totalTime := time.Since(start)
-		mbPerSec := float64(totalBytes/int64(MB)) / totalTime.Seconds()
-		fmt.Printf("Processing speed: %.1f MB/s", mbPerSec)
-
-		if len(args) > 0 {
-			os.Exit(0)
+		if verbose {
+			totalTime := time.Since(start)
+			mbPerSec := float64(totalBytes/int64(MB)) / totalTime.Seconds()
+			fmt.Printf("Processing speed: %.1f MB/s", mbPerSec)
 		}
 
-		fi, err := os.Stdin.Stat()
-		if err != nil {
-			log.Panic("file.stat()", err)
-		}
-
-		if fi.Mode()&os.ModeNamedPipe == 0 || fi.Size() <= 0 {
-			err := cmd.Help()
-			if err != nil {
-				log.Print(err)
-				os.Exit(1)
-			}
-			os.Exit(0)
-		}
-
-		stdin := bufio.NewReader(cmd.InOrStdin())
-		stdout := bufio.NewWriter(cmd.OutOrStdout())
-
-		daTrans.Process(stdin, stdout)
+		os.Exit(0)
 	},
 }
 
@@ -187,6 +185,9 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "show progress bars")
+	viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
+
 	rootCmd.PersistentFlags().StringP("output-dir", "o", "", "output directory")
 	viper.BindPFlag("output-dir", rootCmd.PersistentFlags().Lookup("output-dir"))
 
@@ -217,4 +218,29 @@ func initConfig() {
 	if err := viper.ReadInConfig(); err == nil {
 		fmt.Println("Using config file:", viper.ConfigFileUsed())
 	}
+}
+
+func ProcessStdIn(cmd *cobra.Command) {
+
+	log.Print("Processing stdin")
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		log.Panic("file.stat()", err)
+	}
+
+	if fi.Mode()&os.ModeNamedPipe == 0 {
+		err := cmd.Help()
+		if err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	stdin := bufio.NewReader(cmd.InOrStdin())
+	stdout := bufio.NewWriter(cmd.OutOrStdout())
+
+	daTrans := transliteration.NewDanishTransliterator()
+
+	daTrans.Process(stdin, stdout)
 }
