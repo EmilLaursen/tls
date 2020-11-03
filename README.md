@@ -2,6 +2,8 @@
 
 Transliterates stdin to ASCII, with possibility to overwrite rules. It is a CLI wrapper around the wonderful [`github.com/alexsergivan/transliterator`](https://github.com/alexsergivan/transliterator), with concurrent processing if multiple files are supplied. Read from files or stdin.
 
+![demo](.demo.gif)
+
 
 ## Building
 
