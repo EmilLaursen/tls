@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -25,6 +27,8 @@ import (
 )
 
 var cfgFile string
+
+type Rules map[rune]string
 
 var rootCmd = &cobra.Command{
 	Use: "tls file1.txt file2.txt",
@@ -63,10 +67,12 @@ will place the transliterated file next to file1.txt at
 
 		verbose := viper.GetBool("verbose")
 		out := viper.GetString("output-dir")
+		rulesPath := viper.GetString("rulesjson")
+		rules := parseRules(rulesPath)
 
 		doProcessStdIn := len(args) <= 0
 		if doProcessStdIn {
-			ProcessStdIn(cmd)
+			ProcessStdIn(cmd, rules)
 			os.Exit(0)
 		}
 
@@ -82,7 +88,7 @@ will place the transliterated file next to file1.txt at
 			}
 		}
 
-		daTrans := transliteration.NewDanishTransliterator()
+		trans := transliteration.NewTransliterator(rules)
 
 		var wg sync.WaitGroup
 
@@ -102,7 +108,10 @@ will place the transliterated file next to file1.txt at
 				log.Fatalf("Absolute path error: %+v", errors.Wrap(err, ""))
 			}
 
-			os.MkdirAll(outputDir, 0755)
+			err = os.MkdirAll(outputDir, 0755)
+			if err != nil {
+				log.Fatalf("MakeDirAll error: %+v", errors.Wrap(err, ""))
+			}
 
 			extension := filepath.Ext(arg)
 			filename := strings.TrimSuffix(filepath.Base(arg), extension)
@@ -114,7 +123,7 @@ will place the transliterated file next to file1.txt at
 			// Verbose related...
 			fi, err := os.Stat(arg)
 			if err != nil {
-				log.Fatal("file stat error %+v", errors.Wrap(err, ""))
+				log.Fatalf("file stat error %+v", errors.Wrap(err, ""))
 			}
 
 			fileSize := fi.Size()
@@ -157,7 +166,7 @@ will place the transliterated file next to file1.txt at
 					reader = bufio.NewReader(inputFile)
 				}
 
-				daTrans.Process(reader, bufio.NewWriter(f))
+				trans.Process(reader, bufio.NewWriter(f))
 			}(arg, outputFilePath)
 		}
 
@@ -183,6 +192,10 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.PersistentFlags().StringP("rulesjson", "r", "", "Custom transliteration rules. Json mapping unicode codepoints to strings")
+
+	viper.BindPFlag("rulesjson", rootCmd.PersistentFlags().Lookup("rulesjson"))
+
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "show progress bars")
 	viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
 
@@ -218,7 +231,7 @@ func initConfig() {
 	}
 }
 
-func ProcessStdIn(cmd *cobra.Command) {
+func ProcessStdIn(cmd *cobra.Command, rules Rules) {
 
 	fi, err := os.Stdin.Stat()
 	if err != nil {
@@ -237,7 +250,41 @@ func ProcessStdIn(cmd *cobra.Command) {
 	stdin := bufio.NewReader(cmd.InOrStdin())
 	stdout := bufio.NewWriter(cmd.OutOrStdout())
 
-	daTrans := transliteration.NewDanishTransliterator()
+	trans := transliteration.NewTransliterator(rules)
 
-	daTrans.Process(stdin, stdout)
+	trans.Process(stdin, stdout)
+}
+
+func parseRules(rulesPath string) Rules {
+
+	if len(rulesPath) <= 0 {
+		return Rules(map[rune]string{
+			0x00E6: "æ",
+			0x00F8: "ø",
+			0x00E5: "å",
+			0x00C6: "Æ",
+			0x00D8: "Ø",
+			0x00C5: "Å",
+			0x00A7: "§",
+		})
+	}
+
+	file, err := os.Open(rulesPath)
+	if err != nil {
+		log.Fatalf("Error opening file: %v, error: %+v", rulesPath, errors.Wrap(err, ""))
+	}
+	defer file.Close()
+
+	bytes, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("Error reading file: %v, error: %+v", rulesPath, errors.Wrap(err, ""))
+	}
+
+	var rs Rules
+	err = json.Unmarshal(bytes, &rs)
+	if err != nil {
+		log.Fatalf("Error parsin json file: %v, error: %+v", rulesPath, errors.Wrap(err, ""))
+	}
+
+	return rs
 }
