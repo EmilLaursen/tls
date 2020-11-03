@@ -3,6 +3,11 @@
 Transliterates stdin to ASCII, with possibility to overwrite rules. It is a CLI wrapper around the wonderful [`github.com/alexsergivan/transliterator`](https://github.com/alexsergivan/transliterator), with concurrent processing if multiple files are supplied. Read from files or stdin.
 
 
+## Building
+
+Run either `make tls-linux`, `make tls-osx` or `make tls-windows` to compile the binary for your platform. The binary is compiled in a docker container and copied out to this folder.
+
+
 ## Usage
 ```bash
 Transliterates stdin to ASCII, and also preserves æøå§, then outputs to stdout.
